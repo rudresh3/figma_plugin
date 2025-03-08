@@ -1,0 +1,18 @@
+{
+  "name": "figma-frame-to-gif-mp4",
+  "version": "1.0.0",
+  "description": "A Figma plugin to convert frames to GIF and MP4",
+  "main": "build/code.js",
+  "scripts": {
+    "build": "npm run clean && npm run copy-files",
+    "clean": "rm -rf build",
+    "copy-files": "mkdir -p build && cp src/code.js build/ && cp src/ui/ui.html build/ && cp src/ui/ui.js build/"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.82.0",
+    "@types/node": "^20.11.24"
+  },
+  "keywords": []
+}

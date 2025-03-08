@@ -1,0 +1,22 @@
+{
+  "name": "Frame to GIF/MP4",
+  "id": "1480127169158323496",
+  "api": "1.0.0",
+  "main": "build/code.js",
+  "ui": "build/ui.html",
+  "editorType": ["figma"],
+  "networkAccess": {
+    "allowedDomains": [
+      "https://*.amazonaws.com",
+      "https://*.cloudfront.net",
+      "https://cdnjs.cloudflare.com"
+    ],
+    "reasoning": "The plugin requires access to cloud storage services and CDN for GIF creation library."
+  },
+  "menu": [
+    {
+      "name": "Convert Frames to GIF/MP4",
+      "command": "convert"
+    }
+  ]
+} 
