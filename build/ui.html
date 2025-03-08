@@ -77,6 +77,27 @@
     .frame-item:hover {
       transform: translateX(4px);
     }
+    .export-options {
+      margin: 10px 0;
+      padding: 10px;
+      border: 1px solid #e5e5e5;
+      border-radius: 4px;
+    }
+    .export-option {
+      display: flex;
+      align-items: center;
+      margin: 8px 0;
+    }
+    .export-option input[type="radio"] {
+      margin-right: 8px;
+    }
+    .format-settings {
+      margin-top: 8px;
+      padding-left: 24px;
+    }
+    .format-settings.hidden {
+      display: none;
+    }
   </style>
   <script>
     // gif.js 0.2.0 - https://github.com/jnordberg/gif.js
@@ -219,12 +240,15 @@
         canvas.width = images[0].width;
         canvas.height = images[0].height;
         
-        // Create GIF
+        // Create GIF with optimized settings
         const gif = new GIF({
-          workers: 1,
-          quality: 10,
+          workers: 2, // Increase worker count for better performance
+          quality: 5, // Lower quality for smoother animation
           width: canvas.width,
           height: canvas.height,
+          transparent: 'rgba(0,0,0,0)',
+          background: null,
+          dither: false, // Disable dithering for smoother color transitions
           workerScript: URL.createObjectURL(new Blob([`
             function ByteArray() {
               this.page = -1;
@@ -281,14 +305,11 @@
               this.indexedPixels = null;
               this.colorDepth = null;
               this.colorTab = null;
-              this.neuQuant = null;
               this.usedEntry = new Array();
               this.palSize = 7;
               this.dispose = -1;
               this.firstFrame = true;
               this.sample = 10;
-              this.dither = false;
-              this.globalPalette = false;
               this.out = new ByteArray();
             }
             
@@ -357,53 +378,72 @@
             GIFEncoder.prototype.analyzePixels = function() {
               const w = this.width;
               const h = this.height;
-              this.pixels = new Uint8Array(w * h * 3);
+              this.pixels = new Uint8Array(w * h * 4); // Changed to 4 components (RGBA)
               const data = this.image;
               let count = 0;
               
-              // Copy RGB values from RGBA data
+              // Copy RGBA values
               for (let i = 0; i < h; i++) {
                 for (let j = 0; j < w; j++) {
                   const b = i * w * 4 + j * 4;
                   this.pixels[count++] = data[b];     // R
                   this.pixels[count++] = data[b + 1]; // G
                   this.pixels[count++] = data[b + 2]; // B
+                  this.pixels[count++] = data[b + 3]; // A
                 }
               }
               
-              // Create color map
+              // Create color map with transparency
               const map = {};
               const palette = [];
               let colorCount = 0;
               
-              // Find unique colors (up to 256)
-              for (let i = 0; i < this.pixels.length; i += 3) {
+              // Reserve first color for transparency
+              map['transparent'] = 0;
+              palette.push([0, 0, 0, 0]); // Transparent color
+              colorCount = 1;
+              
+              // Find unique colors (up to 255, since index 0 is reserved for transparency)
+              for (let i = 0; i < this.pixels.length; i += 4) {
                 const r = this.pixels[i];
                 const g = this.pixels[i + 1];
                 const b = this.pixels[i + 2];
+                const a = this.pixels[i + 3];
+                
+                // Skip fully transparent pixels
+                if (a < 128) continue;
+                
                 const key = (r << 16) | (g << 8) | b;
                 
                 if (map[key] === undefined && colorCount < 256) {
                   map[key] = colorCount;
-                  palette.push([r, g, b]);
+                  palette.push([r, g, b, 255]); // Store as opaque
                   colorCount++;
                 }
               }
               
               // Fill remaining palette entries with black
               while (palette.length < 256) {
-                palette.push([0, 0, 0]);
+                palette.push([0, 0, 0, 255]);
               }
               
               // Create indexed pixels
-              const len = this.pixels.length / 3;
+              const len = this.pixels.length / 4;
               this.indexedPixels = new Uint8Array(len);
               
               // Map pixels to palette indices
               for (let i = 0; i < len; i++) {
-                const r = this.pixels[i * 3];
-                const g = this.pixels[i * 3 + 1];
-                const b = this.pixels[i * 3 + 2];
+                const r = this.pixels[i * 4];
+                const g = this.pixels[i * 4 + 1];
+                const b = this.pixels[i * 4 + 2];
+                const a = this.pixels[i * 4 + 3];
+                
+                // Use transparent index for transparent pixels
+                if (a < 128) {
+                  this.indexedPixels[i] = 0;
+                  continue;
+                }
+                
                 const key = (r << 16) | (g << 8) | b;
                 this.indexedPixels[i] = map[key] || 0;
               }
@@ -420,6 +460,7 @@
               this.pixels = null;
               this.colorDepth = 8;
               this.palSize = 7;
+              this.transparent = 0; // Set transparent color index
             };
             
             GIFEncoder.prototype.writeLSD = function() {
@@ -673,15 +714,22 @@
           `], { type: 'application/javascript' }))
         });
 
-        // Add each frame
+        // Add each frame with optimized rendering
         for (let i = 0; i < images.length; i++) {
           ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.imageSmoothingEnabled = true; // Enable image smoothing
+          ctx.imageSmoothingQuality = 'high';
           ctx.drawImage(images[i], 0, 0);
-          gif.addFrame(ctx, { delay: frameDelay, copy: true });
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          gif.addFrame(imageData, { 
+            delay: frameDelay,
+            copy: true,
+            dispose: 2 // Use dispose mode 2 for smoother transitions
+          });
           updateStatus(`Adding frame ${i + 1}/${images.length}...`);
         }
 
-        // Render GIF
+        // Render GIF with progress tracking
         gif.on('progress', p => updateStatus(`Rendering: ${Math.round(p * 100)}%`));
         
         gif.on('finished', blob => {
@@ -703,75 +751,376 @@
       }
     }
 
-    // Initialize UI when document is ready
-    document.addEventListener('DOMContentLoaded', () => {
-      const refresh = document.getElementById('refresh');
-      const convert = document.getElementById('convert');
-      
-      if (refresh) {
-        refresh.onclick = () => {
-          console.log('Refresh button clicked');
-          parent.postMessage({ pluginMessage: { type: 'refresh-frames' } }, '*');
-        };
-      }
-      
-      if (convert) {
-        convert.onclick = () => {
-          console.log('Convert button clicked');
-          if (!selectedFrames || selectedFrames.length === 0) {
-            updateStatus('Please select frames first', true);
-            return;
-          }
-
-          const frameDelay = parseInt(document.getElementById('frameDelay').value) || 500;
-          console.log('Converting frames with delay:', frameDelay);
-          
-          parent.postMessage({
-            pluginMessage: {
-              type: 'convert',
-              frameIds: selectedFrames.map(f => f.id),
-              frameDelay: frameDelay
-            }
-          }, '*');
-          updateStatus('Starting conversion...');
-        };
-      }
-      
-      console.log('UI initialized and ready');
-    });
-
-    // Handle messages from the plugin
-    window.onmessage = async event => {
-      console.log('Received message:', event.data);
-      
-      const msg = event.data.pluginMessage;
-      if (!msg) return;
-
-      if (msg.type === 'frame-list') {
-        updateFramesList(msg.frames);
-      } else if (msg.type === 'frame-images') {
-        try {
-          await createGif(msg.images);
-        } catch (error) {
-          console.error('Error:', error);
-          updateStatus('Error: ' + error.message, true);
+    async function createMp4(frames, isWebM = false) {
+      try {
+        updateStatus(`Creating ${isWebM ? 'WebM' : 'MP4'}...`);
+        
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const frameDelay = parseInt(document.getElementById('frameDelay').value) || 500;
+        const fps = Math.round(1000 / frameDelay);
+        const quality = parseFloat(document.getElementById(isWebM ? 'webmQuality' : 'mp4Quality').value) || 4;
+        
+        // Load all images first with high-quality settings
+        const images = await Promise.all(frames.map((frame, index) => {
+          return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => resolve(img);
+            img.onerror = () => reject(new Error(`Failed to load frame ${index + 1}`));
+            img.src = 'data:image/png;base64,' + frame;
+          });
+        }));
+        
+        if (images.length === 0) {
+          throw new Error('No frames loaded');
         }
-      } else if (msg.type === 'error') {
-        updateStatus(msg.message, true);
+
+        // Set canvas size to first frame
+        canvas.width = images[0].width;
+        canvas.height = images[0].height;
+
+        // Create MediaRecorder with optimized settings
+        const stream = canvas.captureStream(Math.min(60, Math.max(30, fps))); // Cap FPS between 30-60
+        const mediaRecorder = new MediaRecorder(stream, {
+          mimeType: isWebM ? 'video/webm;codecs=vp9' : 'video/webm',
+          videoBitsPerSecond: quality * 1000000 // Convert Mbps to bps
+        });
+
+        const chunks = [];
+        mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
+        mediaRecorder.onstop = async () => {
+          const blob = new Blob(chunks, { type: isWebM ? 'video/webm' : 'video/mp4' });
+          const url = URL.createObjectURL(blob);
+          const preview = document.getElementById('preview');
+          preview.innerHTML = `
+            <video controls style="max-width: 100%; border-radius: 4px; background: ${isWebM ? 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAALEwAACxMBAJqcGAAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAAASdEVYdFRpdGxlAFBhcGVyIFNoZWV0c7mvkfkAAAAXdEVYdEF1dGhvcgBMYXBvIENhbGFtYW5kcmVp35EaKgAAACl0RVh0RGVzY3JpcHRpb24AQmFzZWQgb2YgSmFrdWIgU3RlaW5lciBkZXNpZ26ghAVzAAABbElEQVQ4jYWTv0vDQBTHv3dJqrQqiFtFxD+gk0MHF/8EF9HN2cXVyUHE2U3BQZykIDhJcRRcpLiIOEhxkEA3kSoo/qqgH5eXd7ocNgm1OvS9y3vv+73jHvfIaK1hix1ryHgBTs+HUKkVcHM5/q7HStx8WXX7+2kPgR0QHQ0h+QdHAOpLqTWqfwGTLwXG5kMoBxCxgK4eyDNn+oVwT0UKrJ5NWQAASGWGYXQyxR6A1FwYj7dj1vRvZsLwxwXWVoIWMJ4OYmE9aDG9CwAARpMB7J2PLQC6W/yY2wxbxekzp3y42I2h0yBQyqlpSqUyO5qwADdtg1A5u5qwAO0KjMZ9SMz7oR0BALjak3j+zFnA0V0SJRUHAEgpsXk4ZQGdhYz3vCoDACk5cs8FrB/EUVCc4e2zrOb2K0HyL4iQwuNTwQF0qW5hIZpF/bMEAOh+VRWs51T/BcxLzAIAYPr4Ec0/rzgL+wNQgKWacMXGNwAAAABJRU5ErkJggg==") 0 0, auto' : 'none'};">
+            <source src="${url}" type="${isWebM ? 'video/webm' : 'video/mp4'}">
+          </video>
+          <br>
+          <a href="${url}" download="animation.${isWebM ? 'webm' : 'mp4'}" class="download-link">Download ${isWebM ? 'WebM' : 'MP4'}</a>
+        `;
+        updateStatus(`${isWebM ? 'WebM' : 'MP4'} created successfully!`);
+      };
+
+      mediaRecorder.start();
+
+      // Draw frames with precise timing
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      
+      const startTime = performance.now();
+      let frameIndex = 0;
+      let lastFrameDrawn = false;
+
+      function drawNextFrame() {
+        if (frameIndex >= images.length && !lastFrameDrawn) {
+          // Draw the last frame one more time to ensure it's visible
+          lastFrameDrawn = true;
+          setTimeout(() => {
+            mediaRecorder.stop();
+          }, frameDelay);
+          return;
+        }
+
+        if (lastFrameDrawn) return;
+
+        const expectedTime = startTime + frameIndex * frameDelay;
+        const currentTime = performance.now();
+        const deltaTime = expectedTime - currentTime;
+
+        if (deltaTime <= 0) {
+          // Draw frame
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(images[frameIndex], 0, 0);
+          updateStatus(`Processing frame ${frameIndex + 1}/${images.length}...`);
+          frameIndex++;
+          requestAnimationFrame(drawNextFrame);
+        } else {
+          // Wait for the right time to draw
+          setTimeout(() => requestAnimationFrame(drawNextFrame), deltaTime);
+        }
       }
-    };
-  </script>
+
+      requestAnimationFrame(drawNextFrame);
+
+    } catch (error) {
+      console.error('Error creating video:', error);
+      updateStatus('Error: ' + error.message, true);
+    }
+  }
+
+  async function createLottie(frames) {
+    try {
+      updateStatus('Creating Lottie animation...');
+      
+      const frameDelay = parseInt(document.getElementById('frameDelay').value) || 500;
+      const version = document.getElementById('lottieVersion').value;
+      const fps = Math.round(1000 / frameDelay);
+      
+      // Load all images
+      const images = await Promise.all(frames.map((frame, index) => {
+        return new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.onerror = () => reject(new Error(`Failed to load frame ${index + 1}`));
+          img.src = 'data:image/png;base64,' + frame;
+        });
+      }));
+      
+      if (images.length === 0) {
+        throw new Error('No frames loaded');
+      }
+
+      // Create canvas for image processing
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = images[0].width;
+      canvas.height = images[0].height;
+
+      // Create Lottie JSON structure
+      const lottieData = {
+        v: version,
+        fr: fps,
+        ip: 0,
+        op: images.length,
+        w: canvas.width,
+        h: canvas.height,
+        nm: "Figma Animation",
+        ddd: 0,
+        assets: [],
+        layers: []
+      };
+
+      // Process each frame
+      for (let i = 0; i < images.length; i++) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(images[i], 0, 0);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        
+        // Convert frame to base64
+        const frameBase64 = canvas.toDataURL('image/png');
+        
+        // Add to assets
+        lottieData.assets.push({
+          id: `image_${i}`,
+          w: canvas.width,
+          h: canvas.height,
+          u: "",
+          p: frameBase64,
+          e: 1
+        });
+
+        // Add layer for this frame
+        lottieData.layers.push({
+          ddd: 0,
+          ind: i + 1,
+          ty: 2,
+          nm: `Frame ${i + 1}`,
+          sr: 1,
+          ks: {
+            o: { a: 0, k: 100 },
+            r: { a: 0, k: 0 },
+            p: { a: 0, k: [canvas.width / 2, canvas.height / 2] },
+            a: { a: 0, k: [canvas.width / 2, canvas.height / 2, 0] },
+            s: { a: 0, k: [100, 100] }
+          },
+          ao: 0,
+          ip: i,
+          op: i + 1,
+          st: i,
+          bm: 0,
+          refId: `image_${i}`
+        });
+
+        updateStatus(`Processing frame ${i + 1}/${images.length}...`);
+      }
+
+      // Create download link
+      const blob = new Blob([JSON.stringify(lottieData)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      
+      // Create preview using lottie-web
+      const preview = document.getElementById('preview');
+      preview.innerHTML = `
+        <div id="lottie-preview" style="width: 100%; max-width: 500px; margin: 0 auto;"></div>
+        <br>
+        <a href="${url}" download="animation.json" class="download-link">Download Lottie JSON</a>
+      `;
+
+      // Load lottie-web script dynamically
+      await new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.7.14/lottie.min.js';
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+      });
+
+      // Initialize Lottie preview
+      lottie.loadAnimation({
+        container: document.getElementById('lottie-preview'),
+        renderer: 'svg',
+        loop: true,
+        autoplay: true,
+        animationData: lottieData
+      });
+
+      updateStatus('Lottie animation created successfully!');
+      
+    } catch (error) {
+      console.error('Error creating Lottie:', error);
+      updateStatus('Error: ' + error.message, true);
+    }
+  }
+
+  // Initialize UI when document is ready
+  document.addEventListener('DOMContentLoaded', () => {
+    const refresh = document.getElementById('refresh');
+    const convert = document.getElementById('convert');
+    
+    if (refresh) {
+      refresh.onclick = () => {
+        console.log('Refresh button clicked');
+        parent.postMessage({ pluginMessage: { type: 'refresh-frames' } }, '*');
+      };
+    }
+    
+    if (convert) {
+      convert.onclick = () => {
+        console.log('Convert button clicked');
+        if (!selectedFrames || selectedFrames.length === 0) {
+          updateStatus('Please select frames first', true);
+          return;
+        }
+
+        const format = document.querySelector('input[name="format"]:checked').value;
+        const frameDelay = parseInt(document.getElementById('frameDelay').value) || 500;
+        console.log('Converting frames to', format, 'with delay:', frameDelay);
+        
+        parent.postMessage({
+          pluginMessage: {
+            type: 'convert',
+            frameIds: selectedFrames.map(f => f.id),
+            frameDelay: frameDelay,
+            format: format
+          }
+        }, '*');
+        updateStatus('Starting conversion...');
+      };
+    }
+    
+    console.log('UI initialized and ready');
+  });
+
+  // Handle messages from the plugin
+  window.onmessage = async event => {
+    console.log('Received message:', event.data);
+    
+    const msg = event.data.pluginMessage;
+    if (!msg) return;
+
+    if (msg.type === 'frame-list') {
+      updateFramesList(msg.frames);
+    } else if (msg.type === 'frame-images') {
+      try {
+        const format = document.querySelector('input[name="format"]:checked').value;
+        if (format === 'gif') {
+          await createGif(msg.images);
+        } else if (format === 'mp4') {
+          await createMp4(msg.images, false);
+        } else if (format === 'webm') {
+          await createMp4(msg.images, true);
+        } else if (format === 'lottie') {
+          await createLottie(msg.images);
+        }
+      } catch (error) {
+        console.error('Error:', error);
+        updateStatus('Error: ' + error.message, true);
+      }
+    } else if (msg.type === 'error') {
+      updateStatus(msg.message, true);
+    }
+  };
+
+  function updateFormatSettings() {
+    const format = document.querySelector('input[name="format"]:checked').value;
+    document.querySelectorAll('.format-settings').forEach(el => el.classList.add('hidden'));
+    document.getElementById(`${format}-settings`).classList.remove('hidden');
+  }
+</script>
 </head>
 <body>
   <div id="frames-list">
     <div class="frame-item">No frames selected</div>
   </div>
-  <div>
-    <label>Frame Delay (ms): </label>
-    <input type="number" id="frameDelay" value="500" min="100" max="2000" style="width: 60px">
+
+  <div class="export-options">
+    <div class="export-option">
+      <input type="radio" id="gif" name="format" value="gif" checked onchange="updateFormatSettings()">
+      <label for="gif">GIF</label>
+    </div>
+    
+    <div class="export-option">
+      <input type="radio" id="mp4" name="format" value="mp4" onchange="updateFormatSettings()">
+      <label for="mp4">MP4 (No Transparency)</label>
+    </div>
+
+    <div class="export-option">
+      <input type="radio" id="webm" name="format" value="webm" onchange="updateFormatSettings()">
+      <label for="webm">WebM (With Transparency)</label>
+    </div>
+
+    <div class="export-option">
+      <input type="radio" id="lottie" name="format" value="lottie" onchange="updateFormatSettings()">
+      <label for="lottie">Lottie (JSON)</label>
+    </div>
+
+    <div id="gif-settings" class="format-settings">
+      <div>
+        <label>Frame Delay (ms): </label>
+        <input type="number" id="frameDelay" value="500" min="100" max="2000" style="width: 60px">
+      </div>
+    </div>
+
+    <div id="mp4-settings" class="format-settings hidden">
+      <div>
+        <label>Frame Delay (ms): </label>
+        <input type="number" id="frameDelay" value="500" min="100" max="2000" style="width: 60px">
+      </div>
+      <div>
+        <label>Quality (Mbps): </label>
+        <input type="number" id="mp4Quality" value="4" min="1" max="10" step="0.5" style="width: 60px">
+      </div>
+    </div>
+
+    <div id="webm-settings" class="format-settings hidden">
+      <div>
+        <label>Frame Delay (ms): </label>
+        <input type="number" id="frameDelay" value="500" min="100" max="2000" style="width: 60px">
+      </div>
+      <div>
+        <label>Quality (Mbps): </label>
+        <input type="number" id="webmQuality" value="4" min="1" max="10" step="0.5" style="width: 60px">
+      </div>
+    </div>
+
+    <div id="lottie-settings" class="format-settings hidden">
+      <div>
+        <label>Frame Delay (ms): </label>
+        <input type="number" id="frameDelay" value="500" min="100" max="2000" style="width: 60px">
+      </div>
+      <div>
+        <label>Version: </label>
+        <select id="lottieVersion" style="width: 100px">
+          <option value="5.5.7">5.5.7 (Stable)</option>
+          <option value="5.7.1">5.7.1 (Latest)</option>
+        </select>
+      </div>
+    </div>
   </div>
+
   <button id="refresh">Refresh Frames</button>
-  <button id="convert" disabled>Convert to GIF</button>
+  <button id="convert" disabled>Convert</button>
   <div id="preview"></div>
   <div id="status"></div>
 </body>
